@@ -37,7 +37,7 @@ export const EMPTY_PROFILE: Profile = { full_name: "", company: "", job_title: "
 
 export async function loadProfile(): Promise<Profile> {
   const data = check(
-    await sb().from("profiles").select("full_name, company, job_title, signature").maybeSingle(),
+    await sb().from("keigo_profiles").select("full_name, company, job_title, signature").maybeSingle(),
   );
   return (data as Profile | null) ?? EMPTY_PROFILE;
 }
@@ -45,7 +45,7 @@ export async function loadProfile(): Promise<Profile> {
 export async function saveProfile(p: Profile, userId: string) {
   check(
     await sb()
-      .from("profiles")
+      .from("keigo_profiles")
       .upsert({ ...p, user_id: userId, updated_at: new Date().toISOString() }),
   );
 }
@@ -53,7 +53,7 @@ export async function saveProfile(p: Profile, userId: string) {
 export async function listContacts(): Promise<Contact[]> {
   return check(
     await sb()
-      .from("contacts")
+      .from("keigo_contacts")
       .select("id, name, honorific, relation, politeness, destination")
       .order("created_at"),
   ) as Contact[];
@@ -61,33 +61,33 @@ export async function listContacts(): Promise<Contact[]> {
 
 export async function upsertContact(c: Omit<Contact, "id"> & { id?: string }) {
   const q = c.id
-    ? sb().from("contacts").update(c).eq("id", c.id)
-    : sb().from("contacts").insert(c);
+    ? sb().from("keigo_contacts").update(c).eq("id", c.id)
+    : sb().from("keigo_contacts").insert(c);
   check(await q);
 }
 
 export async function deleteContact(id: string) {
-  check(await sb().from("contacts").delete().eq("id", id));
+  check(await sb().from("keigo_contacts").delete().eq("id", id));
 }
 
 export async function listPresets(): Promise<Preset[]> {
   return check(
-    await sb().from("presets").select("id, label, options").order("created_at"),
+    await sb().from("keigo_presets").select("id, label, options").order("created_at"),
   ) as Preset[];
 }
 
 export async function addPreset(label: string, options: ConvertOptions) {
-  check(await sb().from("presets").insert({ label, options }));
+  check(await sb().from("keigo_presets").insert({ label, options }));
 }
 
 export async function deletePreset(id: string) {
-  check(await sb().from("presets").delete().eq("id", id));
+  check(await sb().from("keigo_presets").delete().eq("id", id));
 }
 
 export async function listHistory(limit = 50): Promise<HistoryItem[]> {
   return check(
     await sb()
-      .from("history")
+      .from("keigo_history")
       .select("id, input, options, candidates, created_at")
       .order("created_at", { ascending: false })
       .limit(limit),
@@ -95,9 +95,9 @@ export async function listHistory(limit = 50): Promise<HistoryItem[]> {
 }
 
 export async function addHistory(input: string, options: ConvertOptions, candidates: Candidate[]) {
-  check(await sb().from("history").insert({ input, options, candidates }));
+  check(await sb().from("keigo_history").insert({ input, options, candidates }));
 }
 
 export async function deleteHistory(id: string) {
-  check(await sb().from("history").delete().eq("id", id));
+  check(await sb().from("keigo_history").delete().eq("id", id));
 }

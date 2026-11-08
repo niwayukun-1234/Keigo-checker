@@ -11,7 +11,7 @@
 
 ### 1. Supabase
 
-1. [Supabase](https://supabase.com/dashboard) で New project を作る（リージョンは Tokyo）。
+1. [Supabase](https://supabase.com/dashboard) で New project を作る（リージョンは Tokyo）。既存のプロジェクトに相乗りしてもよい（表はすべて `keigo_` で始まる名前なので重ならない）。
 2. 左メニューの **SQL Editor** を開き、[`supabase/schema.sql`](supabase/schema.sql) の中身を貼り付けて **Run**。
 3. **Project Settings → API** で次の 2 つを控える。
    - Project URL → `NEXT_PUBLIC_SUPABASE_URL`
