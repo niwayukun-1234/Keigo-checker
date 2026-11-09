@@ -95,3 +95,6 @@ export function labelOf<T extends { id: string; label: string }>(
 }
 
 export const MAX_INPUT_LENGTH = 2000;
+
+// 変換の途中でエラーが起きたときに、ストリームの最後に付ける目印
+export const STREAM_ERROR_MARK = "\u0000ERROR:";

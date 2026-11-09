@@ -13,8 +13,10 @@ import {
   type Candidate,
   type ConvertOptions,
   type Profile,
+  STREAM_ERROR_MARK,
 } from "@/lib/options";
-import { addHistory, addPreset, type Contact, type Preset } from "@/lib/db";
+import { addHistory, addPreset, type Contact, type Persona, type Preset } from "@/lib/db";
+import { parsePartialCandidates } from "@/lib/partialJson";
 import { useSpeech } from "@/lib/useSpeech";
 import {
   Card,
@@ -47,6 +49,7 @@ const ADJUSTMENTS = [
 export function ConvertView({
   session,
   profile,
+  personas,
   contacts,
   presets,
   onPresetsChanged,
@@ -54,6 +57,7 @@ export function ConvertView({
 }: {
   session: Session;
   profile: Profile;
+  personas: Persona[];
   contacts: Contact[];
   presets: Preset[];
   onPresetsChanged: () => void;
@@ -62,6 +66,7 @@ export function ConvertView({
   const [input, setInput] = useState(initial?.input ?? "");
   const [options, setOptions] = useState<ConvertOptions>(initial?.options ?? DEFAULT_OPTIONS);
   const [contactId, setContactId] = useState<string | null>(null);
+  const [personaId, setPersonaId] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>(initial?.candidates ?? []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -94,6 +99,7 @@ export function ConvertView({
       return;
     }
     setContactId(c.id);
+    setPersonaId(c.persona_id && personas.some((p) => p.id === c.persona_id) ? c.persona_id : null);
     update({
       relation: c.relation,
       politeness: c.politeness,
@@ -117,18 +123,53 @@ export function ConvertView({
     setLoading(true);
     setError(null);
     try {
+      const sender = personas.find((p) => p.id === personaId) ?? profile;
       const res = await fetch("/api/convert", {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ input, options: opts, profile, adjust }),
+        body: JSON.stringify({ input, options: opts, profile: sender, adjust }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "変換に失敗しました");
-      setCandidates(data.candidates);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "変換に失敗しました");
+      }
+      // 届いた分から順に表示する
+      setCandidates([]);
+      let scrolled = false;
+      let buf = "";
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const errAt = buf.indexOf(STREAM_ERROR_MARK);
+        if (errAt >= 0) throw new Error(buf.slice(errAt + STREAM_ERROR_MARK.length));
+        const partial = parsePartialCandidates(buf).filter((c) => c.text);
+        if (partial.length > 0) {
+          setCandidates(partial);
+          if (!scrolled) {
+            scrolled = true;
+            setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+          }
+        }
+      }
+      let finalCandidates: Candidate[];
+      try {
+        const parsed = JSON.parse(buf) as { candidates?: Candidate[] };
+        finalCandidates = (parsed.candidates ?? [])
+          .filter((c) => c?.text?.trim())
+          .slice(0, 3)
+          .map((c) => ({ subject: c.subject?.trim() || undefined, text: c.text.trim(), note: c.note?.trim() ?? "" }));
+      } catch {
+        finalCandidates = parsePartialCandidates(buf).filter((c) => c.text.trim());
+      }
+      if (finalCandidates.length === 0) throw new Error("うまく変換できませんでした。もう一度試してください");
+      setCandidates(finalCandidates);
+      const data = { candidates: finalCandidates };
       try {
         localStorage.setItem(
           LAST_OPTIONS_KEY,
@@ -246,6 +287,21 @@ export function ConvertView({
           </Field>
         )}
 
+        {personas.length > 0 && (
+          <Field label="自分（どのプロフィールで送るか）">
+            <ChipRow>
+              <Chip active={personaId === null} onClick={() => setPersonaId(null)}>
+                基本{profile.full_name ? `（${profile.full_name}）` : ""}
+              </Chip>
+              {personas.map((p) => (
+                <Chip key={p.id} active={personaId === p.id} onClick={() => setPersonaId(p.id)}>
+                  {p.label}
+                </Chip>
+              ))}
+            </ChipRow>
+          </Field>
+        )}
+
         <Field label="相手">
           <ChipRow>
             {RELATIONS.map((r) => (
@@ -323,7 +379,7 @@ export function ConvertView({
 
       <div className="sticky bottom-20 z-10">
         <PrimaryButton onClick={() => run(options)} disabled={loading} className="w-full text-lg shadow-lg">
-          {loading ? "変換中…" : "敬語にする"}
+          {loading ? (candidates.length > 0 ? "書いています…" : "変換中…") : "敬語にする"}
         </PrimaryButton>
       </div>
 

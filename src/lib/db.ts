@@ -10,7 +10,11 @@ export type Contact = {
   relation: ConvertOptions["relation"];
   politeness: number;
   destination: ConvertOptions["destination"];
+  persona_id: string | null;
 };
+
+// 「基本」とは別に登録する、自分のプロフィール（例：会社用、バイト用、サークル用）
+export type Persona = Profile & { id: string; label: string };
 
 export type Preset = { id: string; label: string; options: ConvertOptions };
 
@@ -51,12 +55,19 @@ export async function saveProfile(p: Profile, userId: string) {
 }
 
 export async function listContacts(): Promise<Contact[]> {
-  return check(
+  const res = await sb()
+    .from("keigo_contacts")
+    .select("id, name, honorific, relation, politeness, destination, persona_id")
+    .order("created_at");
+  if (!res.error) return res.data as Contact[];
+  // persona_id 列をまだ追加していない保存先でも動くようにする
+  const old = check(
     await sb()
       .from("keigo_contacts")
       .select("id, name, honorific, relation, politeness, destination")
       .order("created_at"),
-  ) as Contact[];
+  ) as Omit<Contact, "persona_id">[];
+  return old.map((c) => ({ ...c, persona_id: null }));
 }
 
 export async function upsertContact(c: Omit<Contact, "id"> & { id?: string }) {
@@ -100,4 +111,23 @@ export async function addHistory(input: string, options: ConvertOptions, candida
 
 export async function deleteHistory(id: string) {
   check(await sb().from("keigo_history").delete().eq("id", id));
+}
+
+const PERSONA_COLUMNS = "id, label, full_name, company, job_title, signature";
+
+export async function listPersonas(): Promise<Persona[]> {
+  return check(
+    await sb().from("keigo_personas").select(PERSONA_COLUMNS).order("created_at"),
+  ) as Persona[];
+}
+
+export async function upsertPersona(p: Omit<Persona, "id"> & { id?: string }) {
+  const q = p.id
+    ? sb().from("keigo_personas").update(p).eq("id", p.id)
+    : sb().from("keigo_personas").insert(p);
+  check(await q);
+}
+
+export async function deletePersona(id: string) {
+  check(await sb().from("keigo_personas").delete().eq("id", id));
 }

@@ -56,3 +56,24 @@ begin
          with check ((select auth.uid()) = user_id)', t);
   end loop;
 end $$;
+
+-- 2026-11-09 追加: 送る相手ごとに切り替える「自分のプロフィール」
+create table if not exists public.keigo_personas (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade default auth.uid(),
+  label text not null,
+  full_name text not null default '',
+  company text not null default '',
+  job_title text not null default '',
+  signature text not null default '',
+  created_at timestamptz not null default now()
+);
+
+alter table public.keigo_personas enable row level security;
+drop policy if exists "keigo own rows" on public.keigo_personas;
+create policy "keigo own rows" on public.keigo_personas for all to authenticated
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
+
+alter table public.keigo_contacts
+  add column if not exists persona_id uuid references public.keigo_personas (id) on delete set null;

@@ -6,10 +6,12 @@ import { getSupabase } from "@/lib/supabase";
 import {
   EMPTY_PROFILE,
   listContacts,
+  listPersonas,
   listPresets,
   loadProfile,
   type Contact,
   type HistoryItem,
+  type Persona,
   type Preset,
 } from "@/lib/db";
 import type { Profile } from "@/lib/options";
@@ -34,6 +36,7 @@ export function App() {
   const [tab, setTab] = useState<Tab>("convert");
   const [profile, setProfile] = useState<Profile>(EMPTY_PROFILE);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [personas, setPersonas] = useState<Persona[]>([]);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [opened, setOpened] = useState<HistoryItem | null>(null);
   const [convertKey, setConvertKey] = useState(0);
@@ -56,6 +59,7 @@ export function App() {
   const reload = useCallback(() => {
     loadProfile().then(setProfile).catch(() => {});
     listContacts().then(setContacts).catch(() => {});
+    listPersonas().then(setPersonas).catch(() => setPersonas([]));
     listPresets().then(setPresets).catch(() => {});
   }, []);
 
@@ -88,13 +92,14 @@ export function App() {
             key={convertKey}
             session={session}
             profile={profile}
+            personas={personas}
             contacts={contacts}
             presets={presets}
             onPresetsChanged={reload}
             initial={opened}
           />
         </div>
-        {tab === "contacts" && <ContactsView contacts={contacts} onChanged={reload} />}
+        {tab === "contacts" && <ContactsView contacts={contacts} personas={personas} onChanged={reload} />}
         {tab === "history" && (
           <HistoryView
             onOpen={(h) => {
@@ -110,6 +115,7 @@ export function App() {
             userId={session.user.id}
             email={session.user.email ?? ""}
             profile={profile}
+            personas={personas}
             presets={presets}
             onChanged={reload}
           />

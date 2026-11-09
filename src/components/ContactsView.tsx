@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { DESTINATIONS, POLITENESS, RELATIONS, labelOf } from "@/lib/options";
-import { deleteContact, upsertContact, type Contact } from "@/lib/db";
+import { deleteContact, upsertContact, type Contact, type Persona } from "@/lib/db";
 import { Card, Chip, ChipRow, ErrorText, Field, PrimaryButton, SubtleButton, inputClass } from "./ui";
 
 type Draft = Omit<Contact, "id"> & { id?: string };
@@ -13,11 +13,20 @@ const EMPTY: Draft = {
   relation: "senpai",
   politeness: 3,
   destination: "line",
+  persona_id: null,
 };
 
 const HONORIFICS = ["さん", "様", "先生", "先輩", "くん", "ちゃん", "（なし）"];
 
-export function ContactsView({ contacts, onChanged }: { contacts: Contact[]; onChanged: () => void }) {
+export function ContactsView({
+  contacts,
+  personas,
+  onChanged,
+}: {
+  contacts: Contact[];
+  personas: Persona[];
+  onChanged: () => void;
+}) {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -111,6 +120,20 @@ export function ContactsView({ contacts, onChanged }: { contacts: Contact[]; onC
             ))}
           </ChipRow>
         </Field>
+        {personas.length > 0 && (
+          <Field label="この人に送るときの自分のプロフィール">
+            <ChipRow>
+              <Chip active={!draft.persona_id} onClick={() => setDraft({ ...draft, persona_id: null })}>
+                基本
+              </Chip>
+              {personas.map((p) => (
+                <Chip key={p.id} active={draft.persona_id === p.id} onClick={() => setDraft({ ...draft, persona_id: p.id })}>
+                  {p.label}
+                </Chip>
+              ))}
+            </ChipRow>
+          </Field>
+        )}
         {error && <ErrorText>{error}</ErrorText>}
         <div className="flex gap-2">
           <PrimaryButton onClick={save} disabled={saving} className="flex-1">
@@ -140,6 +163,9 @@ export function ContactsView({ contacts, onChanged }: { contacts: Contact[]; onC
             </div>
             <div className="text-sm text-zinc-500">
               {labelOf(RELATIONS, c.relation)}・丁寧{c.politeness}・{labelOf(DESTINATIONS, c.destination)}
+              {c.persona_id && personas.find((p) => p.id === c.persona_id)
+                ? `・${personas.find((p) => p.id === c.persona_id)!.label}`
+                : ""}
             </div>
           </div>
           <SubtleButton onClick={() => setDraft({ ...c, honorific: c.honorific || "（なし）" })}>編集</SubtleButton>

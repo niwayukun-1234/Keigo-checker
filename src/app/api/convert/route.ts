@@ -1,12 +1,12 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, type ThinkingLevel } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
 import {
   DESTINATIONS,
   LENGTHS,
   MAX_INPUT_LENGTH,
+  STREAM_ERROR_MARK,
   RELATIONS,
   TONES,
-  type Candidate,
   type ConvertRequest,
 } from "@/lib/options";
 import { buildUserPrompt, RESPONSE_SCHEMA, SYSTEM_INSTRUCTION } from "@/lib/prompt";
@@ -52,10 +52,18 @@ function validate(body: unknown): ConvertRequest | string {
   return b;
 }
 
-export async function POST(request: Request) {
-  const authError = await authorize(request);
-  if (authError) return error(401, authError);
 
+
+function friendlyError(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (/429|RESOURCE_EXHAUSTED|quota/i.test(msg)) {
+    return "無料枠の上限に達しました。少し時間をおいてから試してください";
+  }
+  console.error("convert failed", msg);
+  return "AIへの接続に失敗しました。もう一度試してください";
+}
+
+export async function POST(request: Request) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return error(500, "サーバーの設定（GEMINI_API_KEY）が足りません");
 
@@ -68,35 +76,51 @@ export async function POST(request: Request) {
   const req = validate(body);
   if (typeof req === "string") return error(400, req);
 
+  // ログイン確認とAIへの依頼を同時に始めて、待ち時間を減らす
   const ai = new GoogleGenAI({ apiKey });
+  const authPromise = authorize(request);
+  const streamPromise = ai.models.generateContentStream({
+    model: MODEL,
+    contents: buildUserPrompt(req),
+    config: {
+      systemInstruction: SYSTEM_INSTRUCTION,
+      responseMimeType: "application/json",
+      responseJsonSchema: RESPONSE_SCHEMA,
+      temperature: 0.8,
+      // 考える量を最小にして速くする（gemini-3.8-flash は low が最小）
+      thinkingConfig: { thinkingLevel: (process.env.GEMINI_THINKING_LEVEL || "LOW") as ThinkingLevel },
+    },
+  });
+  // 認証で弾く場合に未処理の拒否にならないようにする
+  streamPromise.catch(() => {});
+
+  const authError = await authPromise;
+  if (authError) return error(401, authError);
+
+  let stream: Awaited<typeof streamPromise>;
   try {
-    const res = await ai.models.generateContent({
-      model: MODEL,
-      contents: buildUserPrompt(req),
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: "application/json",
-        responseJsonSchema: RESPONSE_SCHEMA,
-        temperature: 0.8,
-      },
-    });
-    const parsed = JSON.parse(res.text ?? "{}") as { candidates?: Candidate[] };
-    const candidates = (parsed.candidates ?? [])
-      .filter((c) => c && typeof c.text === "string" && c.text.trim())
-      .slice(0, 3)
-      .map((c) => ({
-        subject: c.subject?.trim() || undefined,
-        text: c.text.trim(),
-        note: c.note?.trim() ?? "",
-      }));
-    if (candidates.length === 0) return error(502, "うまく変換できませんでした。もう一度試してください");
-    return Response.json({ candidates });
+    stream = await streamPromise;
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (/429|RESOURCE_EXHAUSTED|quota/i.test(msg)) {
-      return error(429, "無料枠の上限に達しました。少し時間をおいてから試してください");
-    }
-    console.error("convert failed", msg);
-    return error(502, "AIへの接続に失敗しました。もう一度試してください");
+    const msg = friendlyError(e);
+    return error(/上限/.test(msg) ? 429 : 502, msg);
   }
+
+  const encoder = new TextEncoder();
+  const body2 = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        for await (const chunk of stream) {
+          const t = chunk.text;
+          if (t) controller.enqueue(encoder.encode(t));
+        }
+      } catch (e) {
+        controller.enqueue(encoder.encode(STREAM_ERROR_MARK + friendlyError(e)));
+      } finally {
+        controller.close();
+      }
+    },
+  });
+  return new Response(body2, {
+    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+  });
 }
