@@ -1,8 +1,9 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, type ThinkingLevel } from "@google/genai";
 import { after } from "next/server";
 import type { PushSubscription } from "web-push";
 import { sendPush, supabaseAs } from "@/lib/push-server";
-import { chooseModel } from "@/lib/model";
+import { IDLE_TIMEOUT_MS, TOTAL_TIMEOUT_MS, planAttempts } from "@/lib/model";
+import { SLOW_MESSAGE, STALLED_MESSAGE, streamWithFallback, type StreamResult } from "@/lib/generate";
 import { createClient } from "@supabase/supabase-js";
 import {
   DESTINATIONS,
@@ -15,6 +16,9 @@ import {
   type ConvertRequest,
 } from "@/lib/options";
 import { buildUserPrompt, RESPONSE_SCHEMA, SYSTEM_INSTRUCTION } from "@/lib/prompt";
+
+// モデルの切り替えと生成にかかる時間の上限（秒）。既定の上限で途中で切られないように明示する
+export const maxDuration = 60;
 
 function error(status: number, message: string) {
   return Response.json({ error: message }, { status });
@@ -72,6 +76,10 @@ function friendlyError(e: unknown): string {
   if (/429|RESOURCE_EXHAUSTED|quota/i.test(msg)) {
     return "無料枠の上限に達しました。少し時間をおいてから試してください";
   }
+  if (msg === SLOW_MESSAGE || msg === STALLED_MESSAGE || /503|UNAVAILABLE|overloaded/i.test(msg)) {
+    console.error("convert slow or unavailable", msg);
+    return "AIが混み合っていて時間内に作れませんでした。もう一度試してください";
+  }
   console.error("convert failed", msg);
   return "AIへの接続に失敗しました。もう一度試してください";
 }
@@ -91,37 +99,45 @@ export async function POST(request: Request) {
 
   // ログイン確認とAIへの依頼を同時に始めて、待ち時間を減らす
   const ai = new GoogleGenAI({ apiKey });
-  const choice = chooseModel(req.options);
   const authPromise = authorize(request);
-  const streamPromise = ai.models.generateContentStream({
-    model: choice.model,
-    contents: req.image
-      ? [
-          {
-            role: "user",
-            parts: [
-              { inlineData: { mimeType: req.image.mimeType, data: req.image.data } },
-              { text: buildUserPrompt(req) },
-            ],
-          },
-        ]
-      : buildUserPrompt(req),
-    config: {
-      systemInstruction: SYSTEM_INSTRUCTION,
-      responseMimeType: "application/json",
-      responseJsonSchema: RESPONSE_SCHEMA,
-      temperature: 0.8,
-      // 考える量を最小にして速くする
-      thinkingConfig: { thinkingLevel: choice.thinkingLevel },
-    },
-  });
+  const userPrompt = buildUserPrompt(req);
+  const contents = req.image
+    ? [
+        {
+          role: "user",
+          parts: [
+            { inlineData: { mimeType: req.image.mimeType, data: req.image.data } },
+            { text: userPrompt },
+          ],
+        },
+      ]
+    : userPrompt;
+  // 1つ目のモデルが遅い・混雑しているときは、待ち続けずにもう一方のモデルで作り直す
+  const streamPromise = streamWithFallback(
+    planAttempts(req.options),
+    (attempt, signal) =>
+      ai.models.generateContentStream({
+        model: attempt.model,
+        contents,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          responseMimeType: "application/json",
+          responseJsonSchema: RESPONSE_SCHEMA,
+          temperature: 0.8,
+          // 考える量を最小にして速くする
+          thinkingConfig: { thinkingLevel: attempt.thinkingLevel as ThinkingLevel },
+          abortSignal: signal,
+        },
+      }),
+    { idleTimeoutMs: IDLE_TIMEOUT_MS, totalTimeoutMs: TOTAL_TIMEOUT_MS },
+  );
   // 認証で弾く場合に未処理の拒否にならないようにする
   streamPromise.catch(() => {});
 
   const auth = await authPromise;
   if (typeof auth === "string") return error(401, auth);
 
-  let stream: Awaited<typeof streamPromise>;
+  let stream: StreamResult;
   try {
     stream = await streamPromise;
   } catch (e) {
@@ -153,12 +169,9 @@ export async function POST(request: Request) {
     let full = "";
     let failed: string | null = null;
     try {
-      for await (const chunk of stream) {
-        const t = chunk.text;
-        if (t) {
-          full += t;
-          send(t);
-        }
+      for await (const t of stream.chunks) {
+        full += t;
+        send(t);
       }
     } catch (e) {
       failed = friendlyError(e);
@@ -186,7 +199,7 @@ export async function POST(request: Request) {
     headers: {
       "content-type": "text/plain; charset=utf-8",
       "cache-control": "no-store",
-      "x-keigo-model": choice.model,
+      "x-keigo-model": stream.model,
     },
   });
 }

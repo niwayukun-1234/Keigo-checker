@@ -32,6 +32,10 @@ import {
 } from "./ui";
 
 const LAST_OPTIONS_KEY = "keigo:lastOptions";
+// サーバーはモデルの切り替えを含めて約30秒で書き始める。それを過ぎても何も届かなければ止まったとみなす
+const FIRST_BYTE_TIMEOUT_MS = 45_000;
+const IDLE_TIMEOUT_MS = 25_000;
+const STALLED_ERROR = "時間がかかりすぎたので止めました。もう一度試してください";
 
 function loadLastOptions(): ConvertOptions {
   try {
@@ -47,7 +51,28 @@ type Job = {
   away: boolean;
   settled: boolean;
   recovered: LastResult | null;
+  stalled: boolean;
 };
+
+/** 一定時間なにも届かなければ通信を止める */
+function watchStall(job: Job) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = (ms: number) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (job.settled) return;
+      // 画面を見ていない間は止めない（戻ってきたら、サーバーに残った結果を受け取る）
+      if (document.visibilityState === "hidden") {
+        arm(ms);
+        return;
+      }
+      job.stalled = true;
+      job.abort.abort();
+    }, ms);
+  };
+  arm(FIRST_BYTE_TIMEOUT_MS);
+  return { bump: () => arm(IDLE_TIMEOUT_MS), clear: () => clearTimeout(timer) };
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -194,8 +219,10 @@ export function ConvertView({
       away: false,
       settled: false,
       recovered: null,
+      stalled: false,
     };
     jobRef.current = job;
+    const watchdog = watchStall(job);
     const historyInput = image ? `［写真あり］${input}` : input;
     const finish = (finalCandidates: Candidate[]) => {
       setCandidates(finalCandidates);
@@ -239,6 +266,7 @@ export function ConvertView({
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        watchdog.bump();
         buf += decoder.decode(value, { stream: true });
         const errAt = buf.indexOf(STREAM_ERROR_MARK);
         if (errAt >= 0) throw new Error(buf.slice(errAt + STREAM_ERROR_MARK.length));
@@ -270,10 +298,13 @@ export function ConvertView({
         finish(r.candidates);
       } else if (r?.error) {
         setError(r.error);
+      } else if (job.stalled) {
+        setError(STALLED_ERROR);
       } else {
         setError(e instanceof Error && e.name !== "AbortError" ? e.message : "変換に失敗しました。もう一度試してください");
       }
     } finally {
+      watchdog.clear();
       job.settled = true;
       setLoading(false);
     }
