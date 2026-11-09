@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { DESTINATIONS, POLITENESS, RELATIONS, labelOf } from "@/lib/options";
-import { deleteContact, upsertContact, type Contact, type Persona } from "@/lib/db";
+import { deleteContact, upsertContact, upsertPersona, type Contact, type Persona } from "@/lib/db";
 import { Card, Chip, ChipRow, ErrorText, Field, PrimaryButton, SubtleButton, inputClass } from "./ui";
 
 type Draft = Omit<Contact, "id"> & { id?: string };
@@ -30,6 +30,33 @@ export function ContactsView({
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [newPersona, setNewPersona] = useState<{ label: string; full_name: string; company: string } | null>(null);
+
+  const createPersona = async () => {
+    if (!draft || !newPersona) return;
+    if (!newPersona.label.trim()) {
+      setError("プロフィールの名前を入れてください");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const id = await upsertPersona({
+        label: newPersona.label.trim(),
+        full_name: newPersona.full_name.trim(),
+        company: newPersona.company.trim(),
+        job_title: "",
+        signature: "",
+      });
+      setDraft({ ...draft, persona_id: id });
+      setNewPersona(null);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "保存に失敗しました");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const save = async () => {
     if (!draft?.name.trim()) {
@@ -120,20 +147,52 @@ export function ContactsView({
             ))}
           </ChipRow>
         </Field>
-        {personas.length > 0 && (
-          <Field label="この人に送るときの自分のプロフィール">
-            <ChipRow>
-              <Chip active={!draft.persona_id} onClick={() => setDraft({ ...draft, persona_id: null })}>
-                基本
+        <Field label="この人に送るときの自分（名乗り方・署名）">
+          <ChipRow>
+            <Chip active={!draft.persona_id} onClick={() => setDraft({ ...draft, persona_id: null })}>
+              基本
+            </Chip>
+            {personas.map((p) => (
+              <Chip key={p.id} active={draft.persona_id === p.id} onClick={() => setDraft({ ...draft, persona_id: p.id })}>
+                {p.label}
               </Chip>
-              {personas.map((p) => (
-                <Chip key={p.id} active={draft.persona_id === p.id} onClick={() => setDraft({ ...draft, persona_id: p.id })}>
-                  {p.label}
-                </Chip>
-              ))}
-            </ChipRow>
-          </Field>
-        )}
+            ))}
+            {!newPersona && (
+              <Chip active={false} onClick={() => setNewPersona({ label: "", full_name: "", company: "" })}>
+                ＋ 新しく作る
+              </Chip>
+            )}
+          </ChipRow>
+          {newPersona && (
+            <div className="mt-2 space-y-2 rounded-xl bg-zinc-50 p-3 dark:bg-zinc-800/50">
+              <input
+                value={newPersona.label}
+                onChange={(e) => setNewPersona({ ...newPersona, label: e.target.value })}
+                placeholder="プロフィールの名前（例：バイト用）"
+                className={inputClass}
+              />
+              <input
+                value={newPersona.full_name}
+                onChange={(e) => setNewPersona({ ...newPersona, full_name: e.target.value })}
+                placeholder="この人に名乗る名前（例：山田）"
+                className={inputClass}
+              />
+              <input
+                value={newPersona.company}
+                onChange={(e) => setNewPersona({ ...newPersona, company: e.target.value })}
+                placeholder="所属（例：カフェ〇〇 アルバイト）任意"
+                className={inputClass}
+              />
+              <div className="flex gap-2">
+                <PrimaryButton onClick={createPersona} disabled={saving} className="flex-1 py-2">
+                  作ってこの人に使う
+                </PrimaryButton>
+                <SubtleButton onClick={() => setNewPersona(null)}>やめる</SubtleButton>
+              </div>
+              <p className="text-xs text-zinc-500">署名などの細かい設定は「設定」タブから変えられます。</p>
+            </div>
+          )}
+        </Field>
         {error && <ErrorText>{error}</ErrorText>}
         <div className="flex gap-2">
           <PrimaryButton onClick={save} disabled={saving} className="flex-1">

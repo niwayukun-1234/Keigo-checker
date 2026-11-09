@@ -121,11 +121,13 @@ export async function listPersonas(): Promise<Persona[]> {
   ) as Persona[];
 }
 
-export async function upsertPersona(p: Omit<Persona, "id"> & { id?: string }) {
-  const q = p.id
-    ? sb().from("keigo_personas").update(p).eq("id", p.id)
-    : sb().from("keigo_personas").insert(p);
-  check(await q);
+export async function upsertPersona(p: Omit<Persona, "id"> & { id?: string }): Promise<string> {
+  if (p.id) {
+    check(await sb().from("keigo_personas").update(p).eq("id", p.id));
+    return p.id;
+  }
+  const row = check(await sb().from("keigo_personas").insert(p).select("id").single()) as { id: string };
+  return row.id;
 }
 
 export async function deletePersona(id: string) {

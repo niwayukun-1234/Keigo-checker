@@ -11,7 +11,11 @@ import {
 } from "@/lib/options";
 import { buildUserPrompt, RESPONSE_SCHEMA, SYSTEM_INSTRUCTION } from "@/lib/prompt";
 
-const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+// 速さ重視で軽量モデルを既定にする。品質を上げたいときは GEMINI_MODEL=gemini-3.8-flash など
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+// lite は minimal、通常の flash は low が一番速い
+const THINKING_LEVEL = (process.env.GEMINI_THINKING_LEVEL ||
+  (MODEL.includes("lite") ? "MINIMAL" : "LOW")) as ThinkingLevel;
 
 function error(status: number, message: string) {
   return Response.json({ error: message }, { status });
@@ -87,8 +91,8 @@ export async function POST(request: Request) {
       responseMimeType: "application/json",
       responseJsonSchema: RESPONSE_SCHEMA,
       temperature: 0.8,
-      // 考える量を最小にして速くする（gemini-3.8-flash は low が最小）
-      thinkingConfig: { thinkingLevel: (process.env.GEMINI_THINKING_LEVEL || "LOW") as ThinkingLevel },
+      // 考える量を最小にして速くする
+      thinkingConfig: { thinkingLevel: THINKING_LEVEL },
     },
   });
   // 認証で弾く場合に未処理の拒否にならないようにする
