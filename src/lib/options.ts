@@ -70,7 +70,11 @@ export type ConvertRequest = {
   options: ConvertOptions;
   profile?: Partial<Profile>;
   adjust?: string; // 「もう少し短く」などの追加指示
+  image?: { mimeType: string; data: string }; // 会話のスクショなど（base64）
 };
+
+// 画像は端末側で縮小してから送る（Vercel の受け取り上限 4.5MB より十分小さく）
+export const MAX_IMAGE_BASE64_LENGTH = 3_000_000;
 
 export type Candidate = {
   subject?: string;

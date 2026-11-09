@@ -17,6 +17,7 @@ import {
 } from "@/lib/options";
 import { addHistory, addPreset, type Contact, type Persona, type Preset } from "@/lib/db";
 import { parsePartialCandidates } from "@/lib/partialJson";
+import { prepareImage, type PreparedImage } from "@/lib/image";
 import { useSpeech } from "@/lib/useSpeech";
 import {
   Card,
@@ -73,6 +74,20 @@ export function ConvertView({
   const [copied, setCopied] = useState<string | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const [modelUsed, setModelUsed] = useState<string | null>(null);
+  const [image, setImage] = useState<PreparedImage | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const onPickImage = async (file: File | undefined) => {
+    if (!file) return;
+    setError(null);
+    try {
+      setImage(await prepareImage(file));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "画像を読み込めませんでした");
+    } finally {
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
 
   useEffect(() => {
     if (initial) return;
@@ -116,8 +131,8 @@ export function ConvertView({
   };
 
   const run = async (opts: ConvertOptions, adjust?: string) => {
-    if (!input.trim()) {
-      setError("文章を入力するか、マイクで話してください");
+    if (!input.trim() && !image) {
+      setError("文章を入力するか、マイクで話すか、写真を添付してください");
       return;
     }
     speech.stop();
@@ -131,7 +146,13 @@ export function ConvertView({
           "content-type": "application/json",
           authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ input, options: opts, profile: sender, adjust }),
+        body: JSON.stringify({
+          input,
+          options: opts,
+          profile: sender,
+          adjust,
+          image: image ? { mimeType: image.mimeType, data: image.data } : undefined,
+        }),
       });
       if (!res.ok || !res.body) {
         const data = await res.json().catch(() => ({}));
@@ -178,7 +199,7 @@ export function ConvertView({
           JSON.stringify({ ...opts, recipientName: undefined, recipientHonorific: undefined }),
         );
       } catch {}
-      addHistory(input, opts, data.candidates).catch(() => {});
+      addHistory(image ? `［写真あり］${input}` : input, opts, data.candidates).catch(() => {});
     } catch (e) {
       setError(e instanceof Error ? e.message : "変換に失敗しました");
     } finally {
@@ -223,10 +244,28 @@ export function ConvertView({
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value.slice(0, MAX_INPUT_LENGTH))}
-          placeholder="伝えたいことを、話し言葉のままでOK。例：明日熱あるから休みたい"
+          placeholder={
+            image
+              ? "どう返したいか。例：この会話に返信を作って／明日なら行けるって伝えたい"
+              : "伝えたいことを、話し言葉のままでOK。例：明日熱あるから休みたい"
+          }
           rows={5}
           className={`${inputClass} resize-y leading-relaxed`}
         />
+        {image && (
+          <div className="flex items-start gap-3 rounded-xl bg-zinc-50 p-2 dark:bg-zinc-800/50">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={image.previewUrl} alt="添付した写真" className="h-24 w-auto rounded-lg object-cover" />
+            <div className="flex-1 text-xs text-zinc-500">
+              この写真の会話をもとに返信を作ります。
+              <br />
+              無料のAIでは内容が学習に使われることがあるので、見られて困る写真は避けてください。
+            </div>
+            <button type="button" onClick={() => setImage(null)} aria-label="写真を外す" className="px-2 text-zinc-400">
+              ✕
+            </button>
+          </div>
+        )}
         {speech.interim && (
           <p className="text-sm text-zinc-400">{speech.interim}…</p>
         )}
@@ -235,7 +274,7 @@ export function ConvertView({
             <button
               type="button"
               onClick={speech.listening ? speech.stop : speech.start}
-              className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold ${
+              className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-semibold ${
                 speech.listening
                   ? "animate-pulse bg-red-600 text-white"
                   : "bg-zinc-100 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100"
@@ -245,8 +284,31 @@ export function ConvertView({
               {speech.listening ? "止める" : "話して入力"}
             </button>
           )}
-          {input && (
-            <SubtleButton onClick={() => setInput("")}>クリア</SubtleButton>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => onPickImage(e.target.files?.[0])}
+          />
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl bg-zinc-100 px-3 py-2.5 text-sm font-semibold text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100"
+          >
+            <PhotoIcon />
+            写真
+          </button>
+          {(input || image) && (
+            <SubtleButton
+              className="shrink-0 whitespace-nowrap"
+              onClick={() => {
+                setInput("");
+                setImage(null);
+              }}
+            >
+              クリア
+            </SubtleButton>
           )}
           <span className="ml-auto text-xs text-zinc-400">
             {input.length}/{MAX_INPUT_LENGTH}
@@ -452,6 +514,16 @@ function MicIcon() {
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
       <rect x="9" y="3" width="6" height="11" rx="3" />
       <path d="M5 11a7 7 0 0 0 14 0M12 18v3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PhotoIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <circle cx="9" cy="10" r="1.5" />
+      <path d="M21 16l-5-5-8 8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   DESTINATIONS,
   LENGTHS,
+  MAX_IMAGE_BASE64_LENGTH,
   MAX_INPUT_LENGTH,
   STREAM_ERROR_MARK,
   RELATIONS,
@@ -34,7 +35,16 @@ async function authorize(request: Request): Promise<string | null> {
 
 function validate(body: unknown): ConvertRequest | string {
   const b = body as ConvertRequest;
-  if (!b || typeof b.input !== "string" || !b.input.trim()) return "文章を入力してください";
+  if (!b || typeof b.input !== "string") return "文章を入力してください";
+  if (b.image) {
+    const img = b.image;
+    if (typeof img.data !== "string" || !/^image\/(jpeg|png|webp|heic|heif)$/.test(img.mimeType)) {
+      return "画像の形式に対応していません";
+    }
+    if (img.data.length > MAX_IMAGE_BASE64_LENGTH) return "画像が大きすぎます";
+  } else if (!b.input.trim()) {
+    return "文章を入力してください";
+  }
   if (b.input.length > MAX_INPUT_LENGTH) return `文章は${MAX_INPUT_LENGTH}文字以内にしてください`;
   const o = b.options;
   if (!o) return "条件が指定されていません";
@@ -81,7 +91,17 @@ export async function POST(request: Request) {
   const authPromise = authorize(request);
   const streamPromise = ai.models.generateContentStream({
     model: choice.model,
-    contents: buildUserPrompt(req),
+    contents: req.image
+      ? [
+          {
+            role: "user",
+            parts: [
+              { inlineData: { mimeType: req.image.mimeType, data: req.image.data } },
+              { text: buildUserPrompt(req) },
+            ],
+          },
+        ]
+      : buildUserPrompt(req),
     config: {
       systemInstruction: SYSTEM_INSTRUCTION,
       responseMimeType: "application/json",

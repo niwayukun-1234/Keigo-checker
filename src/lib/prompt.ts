@@ -96,6 +96,21 @@ export function buildUserPrompt(req: ConvertRequest): string {
     lines.push(`# 追加の指示\n${req.adjust}`);
   }
 
+  if (req.image) {
+    lines.push("");
+    lines.push("# 添付画像について");
+    lines.push(
+      "添付画像は、チャットやメールの画面のスクリーンショットであることが多い。画像の中の会話の流れと、誰が自分で誰が相手かを読み取る（通常、右側や自分の名前の吹き出しが自分）。",
+    );
+    lines.push(
+      "下の「ユーザーの指示・伝えたいこと」に従って、相手の最後のメッセージへの返信として、そのまま送れる文章を作る。指示がなければ、自然な返信を作る。画像にない事実は足さない。",
+    );
+    lines.push("");
+    lines.push("# ユーザーの指示・伝えたいこと");
+    lines.push(req.input.trim() || "この会話への返信を作って");
+    return lines.join("\n");
+  }
+
   lines.push("");
   lines.push("# 元の文章");
   lines.push(req.input);
