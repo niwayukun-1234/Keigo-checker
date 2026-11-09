@@ -43,9 +43,12 @@ export const SYSTEM_INSTRUCTION = `あなたは日本語の敬語と文章表現
 - 元の文章の意味を変えない。入力にない日付・金額・約束・事実を勝手に足さない。
 - 音声入力の誤変換と思われる箇所は、文脈から自然に直す。
 - 二重敬語や誤った敬語（「おっしゃられる」「拝見させていただく」など）を使わない。
+- 目上には「了解しました」ではなく「承知しました」、「ご苦労さまです」ではなく「お疲れさまです」。
+- 「させていただく」を重ねない。「〜のほう」「〜になります」などのバイト敬語を使わない。
+- 丁寧度が低い指定のときは、敬語を足しすぎない。
 - 名前が分からない場合は「〇〇」のような穴埋めを使わず、名前なしで自然に書く。
-- 候補は方向性を少しずつ変えて 3 つ出す。
-- note には、主にどこをなぜ変えたかを 1〜2 文で書く（例：「行きます」を謙譲語の「伺います」にしました）。
+- 候補は言い回しを少し変えて 2 つ出す。1つ目が一番おすすめ。
+- note は、主に変えた点を 40 字以内で 1 文（例：「行きます」を謙譲語の「伺います」に）。
 - 出力は指定の JSON だけにする。`;
 
 export function buildUserPrompt(req: ConvertRequest): string {
@@ -104,6 +107,8 @@ export const RESPONSE_SCHEMA = {
   properties: {
     candidates: {
       type: "array",
+      minItems: 2,
+      maxItems: 2,
       items: {
         type: "object",
         properties: {
@@ -112,7 +117,7 @@ export const RESPONSE_SCHEMA = {
             description: "メールの件名。送り先がメール以外なら空文字",
           },
           text: { type: "string", description: "そのまま送れる文章" },
-          note: { type: "string", description: "どこをなぜ変えたか" },
+          note: { type: "string", description: "主に変えた点（40字以内）" },
         },
         required: ["subject", "text", "note"],
       },

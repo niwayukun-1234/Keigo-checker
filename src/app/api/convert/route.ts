@@ -1,4 +1,5 @@
-import { GoogleGenAI, type ThinkingLevel } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
+import { chooseModel } from "@/lib/model";
 import { createClient } from "@supabase/supabase-js";
 import {
   DESTINATIONS,
@@ -10,12 +11,6 @@ import {
   type ConvertRequest,
 } from "@/lib/options";
 import { buildUserPrompt, RESPONSE_SCHEMA, SYSTEM_INSTRUCTION } from "@/lib/prompt";
-
-// 速さ重視で軽量モデルを既定にする。品質を上げたいときは GEMINI_MODEL=gemini-3.8-flash など
-const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
-// lite は minimal、通常の flash は low が一番速い
-const THINKING_LEVEL = (process.env.GEMINI_THINKING_LEVEL ||
-  (MODEL.includes("lite") ? "MINIMAL" : "LOW")) as ThinkingLevel;
 
 function error(status: number, message: string) {
   return Response.json({ error: message }, { status });
@@ -82,9 +77,10 @@ export async function POST(request: Request) {
 
   // ログイン確認とAIへの依頼を同時に始めて、待ち時間を減らす
   const ai = new GoogleGenAI({ apiKey });
+  const choice = chooseModel(req.options);
   const authPromise = authorize(request);
   const streamPromise = ai.models.generateContentStream({
-    model: MODEL,
+    model: choice.model,
     contents: buildUserPrompt(req),
     config: {
       systemInstruction: SYSTEM_INSTRUCTION,
@@ -92,7 +88,7 @@ export async function POST(request: Request) {
       responseJsonSchema: RESPONSE_SCHEMA,
       temperature: 0.8,
       // 考える量を最小にして速くする
-      thinkingConfig: { thinkingLevel: THINKING_LEVEL },
+      thinkingConfig: { thinkingLevel: choice.thinkingLevel },
     },
   });
   // 認証で弾く場合に未処理の拒否にならないようにする
@@ -125,6 +121,10 @@ export async function POST(request: Request) {
     },
   });
   return new Response(body2, {
-    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+      "x-keigo-model": choice.model,
+    },
   });
 }

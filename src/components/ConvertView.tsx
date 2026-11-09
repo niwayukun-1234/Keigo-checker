@@ -72,6 +72,7 @@ export function ConvertView({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const [modelUsed, setModelUsed] = useState<string | null>(null);
 
   useEffect(() => {
     if (initial) return;
@@ -136,6 +137,7 @@ export function ConvertView({
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error ?? "変換に失敗しました");
       }
+      setModelUsed(res.headers.get("x-keigo-model"));
       // 届いた分から順に表示する
       setCandidates([]);
       let scrolled = false;
@@ -387,6 +389,11 @@ export function ConvertView({
 
       {candidates.length > 0 && (
         <div ref={resultsRef} className="scroll-mt-4 space-y-3">
+          {modelUsed && (
+            <p className="text-xs text-zinc-400">
+              {modelUsed.includes("lite") ? "⚡ 速さ優先で作成" : "◎ 丁寧さ優先で作成（大事な相手・メール向け）"}
+            </p>
+          )}
           {candidates.map((c, i) => {
             const full = c.subject ? `件名：${c.subject}\n\n${c.text}` : c.text;
             return (
