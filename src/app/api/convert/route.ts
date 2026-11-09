@@ -1,4 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
+import { after } from "next/server";
+import type { PushSubscription } from "web-push";
+import { sendPush, supabaseAs } from "@/lib/push-server";
 import { chooseModel } from "@/lib/model";
 import { createClient } from "@supabase/supabase-js";
 import {
@@ -17,7 +20,7 @@ function error(status: number, message: string) {
   return Response.json({ error: message }, { status });
 }
 
-async function authorize(request: Request): Promise<string | null> {
+async function authorize(request: Request): Promise<string | { token: string }> {
   const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) return "ログインしてください";
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -30,7 +33,7 @@ async function authorize(request: Request): Promise<string | null> {
   if (allowed && data.user.email?.toLowerCase() !== allowed) {
     return "このアカウントでは使えません";
   }
-  return null;
+  return { token };
 }
 
 function validate(body: unknown): ConvertRequest | string {
@@ -55,13 +58,14 @@ function validate(body: unknown): ConvertRequest | string {
   if (!Number.isInteger(o.politeness) || o.politeness < 1 || o.politeness > 5) {
     return "丁寧度の指定が不正です";
   }
+  if (b.jobId !== undefined && (typeof b.jobId !== "string" || !/^[\w-]{8,64}$/.test(b.jobId))) {
+    return "リクエストの形式が正しくありません";
+  }
   if (b.adjust && (typeof b.adjust !== "string" || b.adjust.length > 200)) {
     return "追加の指示が長すぎます";
   }
   return b;
 }
-
-
 
 function friendlyError(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
@@ -114,8 +118,8 @@ export async function POST(request: Request) {
   // 認証で弾く場合に未処理の拒否にならないようにする
   streamPromise.catch(() => {});
 
-  const authError = await authPromise;
-  if (authError) return error(401, authError);
+  const auth = await authPromise;
+  if (typeof auth === "string") return error(401, auth);
 
   let stream: Awaited<typeof streamPromise>;
   try {
@@ -125,21 +129,59 @@ export async function POST(request: Request) {
     return error(/上限/.test(msg) ? 429 : 502, msg);
   }
 
+  // 画面に流しつつ、全文も貯めておく（アプリを離れていたら、終わったときに通知するため）
   const encoder = new TextEncoder();
+  const ref: { controller: ReadableStreamDefaultController<Uint8Array> | null } = { controller: null };
+  let clientGone = false;
+  const send = (t: string) => {
+    if (clientGone || !ref.controller) return;
+    try {
+      ref.controller.enqueue(encoder.encode(t));
+    } catch {
+      clientGone = true;
+    }
+  };
   const body2 = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      try {
-        for await (const chunk of stream) {
-          const t = chunk.text;
-          if (t) controller.enqueue(encoder.encode(t));
-        }
-      } catch (e) {
-        controller.enqueue(encoder.encode(STREAM_ERROR_MARK + friendlyError(e)));
-      } finally {
-        controller.close();
-      }
+    start(c) {
+      ref.controller = c;
+    },
+    cancel() {
+      clientGone = true;
     },
   });
+  const finished = (async () => {
+    let full = "";
+    let failed: string | null = null;
+    try {
+      for await (const chunk of stream) {
+        const t = chunk.text;
+        if (t) {
+          full += t;
+          send(t);
+        }
+      }
+    } catch (e) {
+      failed = friendlyError(e);
+      send(STREAM_ERROR_MARK + failed);
+    } finally {
+      if (!clientGone) {
+        try {
+          ref.controller?.close();
+        } catch {}
+      }
+    }
+    return { full, failed };
+  })();
+
+  if (req.jobId) {
+    const jobId = req.jobId;
+    const origin = new URL(request.url).origin;
+    after(async () => {
+      const { full, failed } = await finished;
+      await notifyIfAway(auth.token, jobId, req, full, failed, origin);
+    });
+  }
+
   return new Response(body2, {
     headers: {
       "content-type": "text/plain; charset=utf-8",
@@ -147,4 +189,58 @@ export async function POST(request: Request) {
       "x-keigo-model": choice.model,
     },
   });
+}
+
+/** 変換中にアプリを離れていたら、結果を保存して通知を送る */
+async function notifyIfAway(
+  token: string,
+  jobId: string,
+  req: ConvertRequest,
+  full: string,
+  failed: string | null,
+  origin: string,
+) {
+  const sb = supabaseAs(token);
+  if (!sb) return;
+  const { data: row } = await sb
+    .from("keigo_push")
+    .select("user_id, subscription, pending_job, away_job")
+    .maybeSingle();
+  if (!row || row.away_job !== jobId) return;
+
+  let candidates: { subject?: string; text: string; note?: string }[] = [];
+  try {
+    const parsed = JSON.parse(full) as { candidates?: typeof candidates };
+    candidates = (parsed.candidates ?? []).filter((c) => c?.text?.trim());
+  } catch {}
+
+  const wantsPush = row.pending_job === jobId && row.subscription;
+  await sb
+    .from("keigo_push")
+    .update({
+      last_result: {
+        job: jobId,
+        input: req.image ? `［写真あり］${req.input}` : req.input,
+        options: req.options,
+        candidates,
+        error: candidates.length ? null : (failed ?? "うまく変換できませんでした"),
+        created_at: new Date().toISOString(),
+      },
+      pending_job: wantsPush ? null : row.pending_job,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", row.user_id);
+
+  if (!wantsPush) return;
+  const first = candidates[0]?.text.replace(/\s+/g, " ").trim();
+  const result = await sendPush(
+    row.subscription as PushSubscription,
+    first
+      ? { title: "敬語ができました", body: first.length > 90 ? `${first.slice(0, 90)}…` : first, url: `/?job=${jobId}` }
+      : { title: "変換できませんでした", body: failed ?? "もう一度試してください", url: "/" },
+    origin,
+  );
+  if (result === "gone") {
+    await sb.from("keigo_push").update({ subscription: null }).eq("user_id", row.user_id);
+  }
 }

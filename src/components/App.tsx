@@ -15,6 +15,7 @@ import {
   type Preset,
 } from "@/lib/db";
 import type { Profile } from "@/lib/options";
+import { fetchLastResult, registerServiceWorker } from "@/lib/push";
 import { ConvertView } from "./ConvertView";
 import { ContactsView } from "./ContactsView";
 import { HistoryView } from "./HistoryView";
@@ -68,6 +69,26 @@ export function App() {
     if (userId) reload();
   }, [userId, reload]);
 
+  useEffect(() => {
+    registerServiceWorker();
+  }, []);
+
+  // 通知から開いたとき（アプリが閉じていた場合）は、その結果を表示する
+  useEffect(() => {
+    if (!userId) return;
+    const job = new URLSearchParams(window.location.search).get("job");
+    if (!job) return;
+    window.history.replaceState(null, "", "/");
+    fetchLastResult(job)
+      .then((r) => {
+        if (!r || r.candidates.length === 0) return;
+        setOpened({ id: r.job, input: r.input, options: r.options, candidates: r.candidates, created_at: r.created_at });
+        setConvertKey((k) => k + 1);
+        setTab("convert");
+      })
+      .catch(() => {});
+  }, [userId]);
+
   if (!sb) {
     return (
       <div className="mx-auto max-w-md p-6 text-sm">
@@ -112,6 +133,7 @@ export function App() {
         {tab === "settings" && (
           <SettingsView
             key={JSON.stringify(profile)}
+            session={session}
             userId={session.user.id}
             email={session.user.email ?? ""}
             profile={profile}

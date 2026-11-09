@@ -19,6 +19,7 @@ import { addHistory, addPreset, type Contact, type Persona, type Preset } from "
 import { parsePartialCandidates } from "@/lib/partialJson";
 import { prepareImage, type PreparedImage } from "@/lib/image";
 import { useSpeech } from "@/lib/useSpeech";
+import { fetchLastResult, markAway, markBack, type LastResult } from "@/lib/push";
 import {
   Card,
   Chip,
@@ -38,6 +39,29 @@ function loadLastOptions(): ConvertOptions {
     if (raw) return { ...DEFAULT_OPTIONS, ...JSON.parse(raw) };
   } catch {}
   return DEFAULT_OPTIONS;
+}
+
+type Job = {
+  id: string;
+  abort: AbortController;
+  away: boolean;
+  settled: boolean;
+  recovered: LastResult | null;
+};
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** アプリを離れている間に終わった変換の結果を、サーバーから受け取る */
+async function waitForLastResult(job: Job, timeoutMs: number): Promise<LastResult | null> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    if (job.settled) return null;
+    if (job.recovered) return job.recovered;
+    const r = await fetchLastResult(job.id).catch(() => null);
+    if (r) return r;
+    await sleep(2000);
+  }
+  return null;
 }
 
 const ADJUSTMENTS = [
@@ -76,6 +100,32 @@ export function ConvertView({
   const [modelUsed, setModelUsed] = useState<string | null>(null);
   const [image, setImage] = useState<PreparedImage | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const jobRef = useRef<Job | null>(null);
+
+  // 変換中にアプリを離れたら、終わったときに通知してもらう
+  useEffect(() => {
+    const onVisibility = () => {
+      const job = jobRef.current;
+      if (!job || job.settled) return;
+      if (document.visibilityState === "hidden") {
+        job.away = true;
+        markAway(session, job.id);
+        return;
+      }
+      if (!job.away) return;
+      markBack(session, job.id);
+      // 戻ってきたとき、通信が止まっていたらサーバーに残った結果を使う
+      void (async () => {
+        const r = await waitForLastResult(job, 60_000);
+        if (r && !job.settled) {
+          job.recovered = r;
+          job.abort.abort();
+        }
+      })();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [session]);
 
   const onPickImage = async (file: File | undefined) => {
     if (!file) return;
@@ -138,15 +188,36 @@ export function ConvertView({
     speech.stop();
     setLoading(true);
     setError(null);
+    const job: Job = {
+      id: crypto.randomUUID(),
+      abort: new AbortController(),
+      away: false,
+      settled: false,
+      recovered: null,
+    };
+    jobRef.current = job;
+    const historyInput = image ? `［写真あり］${input}` : input;
+    const finish = (finalCandidates: Candidate[]) => {
+      setCandidates(finalCandidates);
+      try {
+        localStorage.setItem(
+          LAST_OPTIONS_KEY,
+          JSON.stringify({ ...opts, recipientName: undefined, recipientHonorific: undefined }),
+        );
+      } catch {}
+      addHistory(historyInput, opts, finalCandidates).catch(() => {});
+    };
     try {
       const sender = personas.find((p) => p.id === personaId) ?? profile;
       const res = await fetch("/api/convert", {
         method: "POST",
+        signal: job.abort.signal,
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
+          jobId: job.id,
           input,
           options: opts,
           profile: sender,
@@ -191,18 +262,19 @@ export function ConvertView({
         finalCandidates = parsePartialCandidates(buf).filter((c) => c.text.trim());
       }
       if (finalCandidates.length === 0) throw new Error("うまく変換できませんでした。もう一度試してください");
-      setCandidates(finalCandidates);
-      const data = { candidates: finalCandidates };
-      try {
-        localStorage.setItem(
-          LAST_OPTIONS_KEY,
-          JSON.stringify({ ...opts, recipientName: undefined, recipientHonorific: undefined }),
-        );
-      } catch {}
-      addHistory(image ? `［写真あり］${input}` : input, opts, data.candidates).catch(() => {});
+      finish(finalCandidates);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "変換に失敗しました");
+      // アプリを離れている間に通信が切れた場合は、サーバーに残った結果を使う
+      const r = job.away ? (job.recovered ?? (await waitForLastResult(job, 20_000))) : null;
+      if (r?.candidates.length) {
+        finish(r.candidates);
+      } else if (r?.error) {
+        setError(r.error);
+      } else {
+        setError(e instanceof Error && e.name !== "AbortError" ? e.message : "変換に失敗しました。もう一度試してください");
+      }
     } finally {
+      job.settled = true;
       setLoading(false);
     }
   };

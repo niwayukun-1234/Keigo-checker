@@ -71,6 +71,7 @@ export type ConvertRequest = {
   profile?: Partial<Profile>;
   adjust?: string; // 「もう少し短く」などの追加指示
   image?: { mimeType: string; data: string }; // 会話のスクショなど（base64）
+  jobId?: string; // 変換ごとのID。アプリを離れたときの通知に使う
 };
 
 // 画像は端末側で縮小してから送る（Vercel の受け取り上限 4.5MB より十分小さく）

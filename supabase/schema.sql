@@ -77,3 +77,20 @@ create policy "keigo own rows" on public.keigo_personas for all to authenticated
 
 alter table public.keigo_contacts
   add column if not exists persona_id uuid references public.keigo_personas (id) on delete set null;
+
+-- 2026-11-09 追加: 変換が終わったらスマホに通知する
+-- subscription: 通知の送り先 / pending_job: 通知を待っている変換 / away_job: アプリを離れた変換 / last_result: その結果
+create table if not exists public.keigo_push (
+  user_id uuid primary key references auth.users (id) on delete cascade default auth.uid(),
+  subscription jsonb,
+  pending_job text,
+  away_job text,
+  last_result jsonb,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.keigo_push enable row level security;
+drop policy if exists "keigo own rows" on public.keigo_push;
+create policy "keigo own rows" on public.keigo_push for all to authenticated
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);

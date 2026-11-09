@@ -4,6 +4,8 @@ import { useState } from "react";
 import type { Profile } from "@/lib/options";
 import { deletePersona, deletePreset, saveProfile, upsertPersona, type Persona, type Preset } from "@/lib/db";
 import { getSupabase } from "@/lib/supabase";
+import type { Session } from "@supabase/supabase-js";
+import { NotificationSettings } from "./NotificationSettings";
 import { Card, ErrorText, Field, PrimaryButton, SubtleButton, inputClass } from "./ui";
 
 function ProfileFields({ value, onChange }: { value: Profile; onChange: (p: Profile) => void }) {
@@ -35,6 +37,7 @@ type PersonaDraft = Omit<Persona, "id"> & { id?: string };
 const EMPTY_PERSONA: PersonaDraft = { label: "", full_name: "", company: "", job_title: "", signature: "" };
 
 export function SettingsView({
+  session,
   userId,
   email,
   profile,
@@ -42,6 +45,7 @@ export function SettingsView({
   presets,
   onChanged,
 }: {
+  session: Session;
   userId: string;
   email: string;
   profile: Profile;
@@ -172,6 +176,8 @@ export function SettingsView({
           </div>
         ))}
       </Card>
+
+      <NotificationSettings session={session} />
 
       <Card className="space-y-3">
         <div className="text-sm text-zinc-500">{email} でログイン中</div>

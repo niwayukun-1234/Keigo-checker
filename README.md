@@ -55,3 +55,10 @@ cp .env.example .env.local   # 値を入れる
 npm install
 npm run dev
 ```
+
+## 通知（変換が終わったらスマホに通知）
+
+- Supabase の SQL Editor で `supabase/schema.sql` の「keigo_push」の部分を実行する。
+- iPhone は Safari で「ホーム画面に追加」したアプリから開き、設定タブの「通知をオンにする」を押す（iOS 16.4 以降）。
+- 通知用の鍵は `GEMINI_API_KEY` から自動で作るので、追加の環境変数は不要。Gemini のキーを変えたら、通知をいったんオフにしてオンにし直す。
+  自分で決めた鍵を使いたいときは `VAPID_PUBLIC_KEY` と `VAPID_PRIVATE_KEY` を設定する。
